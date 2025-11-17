@@ -1,0 +1,21 @@
+# Airflow Core
+apache-airflow==2.8.0
+apache-airflow-providers-postgres==5.10.0
+apache-airflow-providers-http==4.8.0
+
+# Data Processing
+pandas==2.1.4
+numpy==1.26.3
+
+# HTTP Requests
+requests==2.31.0
+
+# Database
+psycopg2-binary==2.9.9
+SQLAlchemy==1.4.51  # ← CAMBIO AQUÍ: Compatible con Airflow 2.8.0
+
+# ML Libraries (para feature engineering)
+scikit-learn==1.4.0
+
+# Utilidades
+python-dotenv==1.0.0

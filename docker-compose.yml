@@ -1,0 +1,223 @@
+version: '3.8'
+
+services:
+  # =====================================================
+  # DATABASE (PostgreSQL) - El "Entorno" Persistente
+  # =====================================================
+  db:
+    image: postgres:15-alpine
+    container_name: energy_forecast_db
+    environment:
+      POSTGRES_USER: energy_user
+      POSTGRES_PASSWORD: energy_pass
+      POSTGRES_DB: energy_forecast
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - energy_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U energy_user -d energy_forecast"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =====================================================
+  # API (FastAPI) - El "Cerebro" del Agente
+  # =====================================================
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: energy_forecast_api
+    environment:
+      MODEL_PATH: /app/models/best_energy_model.pkl
+      FEATURES_PATH: /app/models/features.pkl
+      METADATA_PATH: /app/models/model_metadata.pkl
+    volumes:
+      - ./models:/app/models:ro
+      - ./api:/app/api
+    ports:
+      - "8000:8000"
+    networks:
+      - energy_network
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+  
+  streamlit:
+    build:
+      context: ./streamlit_app
+      dockerfile: Dockerfile
+    container_name: energy_forecast_streamlit
+    ports:
+      - "8501:8501"
+    environment:
+      - API_URL=http://api:8000
+    depends_on:
+      - api
+    networks:
+      - energy_network
+    restart: unless-stopped
+
+  # =====================================================
+  # AIRFLOW - El Orquestador del Agente
+  # =====================================================
+  
+  # Redis (Para el Celery Executor de Airflow)
+  redis:
+    image: redis:7-alpine
+    container_name: energy_forecast_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - energy_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Airflow Webserver
+  airflow-webserver:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: energy_forecast_airflow_webserver
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://energy_user:energy_pass@db:5432/airflow_db
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://energy_user:energy_pass@db:5432/airflow_db
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: 'ZmDfcTF7_60GrrY167zsiPd67pEvs0aGOv2oasOM1Pg='
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+      AIRFLOW_CONN_POSTGRES_ENERGY: postgresql://energy_user:energy_pass@db:5432/energy_forecast
+      AIRFLOW_CONN_API_ENERGY: http://api:8000
+      AIRFLOW_VAR_WEATHER_API_KEY: ${WEATHER_API_KEY:-your_openweather_api_key}
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./config/airflow.cfg:/opt/airflow/airflow.cfg:ro
+    ports:
+      - "8080:8080"
+    networks:
+      - energy_network
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: webserver
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Airflow Scheduler
+  airflow-scheduler:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: energy_forecast_airflow_scheduler
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://energy_user:energy_pass@db:5432/airflow_db
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://energy_user:energy_pass@db:5432/airflow_db
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: 'ZmDfcTF7_60GrrY167zsiPd67pEvs0aGOv2oasOM1Pg='
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW_CONN_POSTGRES_ENERGY: postgresql://energy_user:energy_pass@db:5432/energy_forecast
+      AIRFLOW_CONN_API_ENERGY: http://api:8000
+      AIRFLOW_VAR_WEATHER_API_KEY: ${WEATHER_API_KEY:-your_openweather_api_key}
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./config/airflow.cfg:/opt/airflow/airflow.cfg:ro
+    networks:
+      - energy_network
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: scheduler
+    restart: unless-stopped
+
+  # Airflow Worker
+  airflow-worker:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: energy_forecast_airflow_worker
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://energy_user:energy_pass@db:5432/airflow_db
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://energy_user:energy_pass@db:5432/airflow_db
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: 'ZmDfcTF7_60GrrY167zsiPd67pEvs0aGOv2oasOM1Pg='
+      AIRFLOW_CONN_POSTGRES_ENERGY: postgresql://energy_user:energy_pass@db:5432/energy_forecast
+      AIRFLOW_CONN_API_ENERGY: http://api:8000
+      AIRFLOW_VAR_WEATHER_API_KEY: ${WEATHER_API_KEY:-your_openweather_api_key}
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./config/airflow.cfg:/opt/airflow/airflow.cfg:ro
+    networks:
+      - energy_network
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery worker
+    restart: unless-stopped
+
+  # Airflow Flower (Monitoring de Celery)
+  airflow-flower:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: energy_forecast_airflow_flower
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://energy_user:energy_pass@db:5432/airflow_db
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://energy_user:energy_pass@db:5432/airflow_db
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+    ports:
+      - "5555:5555"
+    networks:
+      - energy_network
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery flower
+    restart: unless-stopped
+
+networks:
+  energy_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
