@@ -86,7 +86,7 @@ with st.sidebar:
     st.markdown("- [Métricas](http://localhost:8000/dashboard/performance/summary)")
 
 # Contenido principal
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     st.markdown('<div class="metric-card">', unsafe_allow_html=True)
@@ -119,6 +119,17 @@ with col3:
     )
     if st.button("Ver Análisis 📈", use_container_width=True):
         st.switch_page("pages/3_📈_Análisis.py")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with col4:
+    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+    st.metric(
+        label="🔮 Predecir Demanda",
+        value="Usar Modelo",
+        help="Ingresa datos para predecir demanda energética"
+    )
+    if st.button("Predecir Demanda 🔮", use_container_width=True):
+        st.switch_page("pages/3_🔮_Predecir_Demanda.py")
     st.markdown('</div>', unsafe_allow_html=True)
 
 st.divider()
