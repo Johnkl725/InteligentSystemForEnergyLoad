@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, validator
 from ingestion import router as ingestion_router
+from dashboard import router as dashboard_router
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -197,6 +198,9 @@ app = FastAPI(
 
 # Incluir router de ingestión
 app.include_router(ingestion_router)
+
+# Incluir router de dashboard
+app.include_router(dashboard_router)
 
 
 @app.get("/", tags=["Status"])
