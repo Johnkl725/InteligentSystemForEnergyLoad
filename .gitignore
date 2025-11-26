@@ -38,8 +38,6 @@ standalone_admin_password.txt
 .dockerignore
 
 # Environment
-.env
-.venv
 env/
 venv/
 ENV/
