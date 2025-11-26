@@ -11,151 +11,191 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import os
+import sys
+import pytz
+
+# Agregar el directorio padre al path para importar agente_climatico
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from agente_climatico_v2 import AgenteClimaticoInteligente
 
 st.set_page_config(page_title="Predecir Demanda", page_icon="🔮", layout="wide")
 
 # API URL
 api_url = os.getenv("API_URL", "http://localhost:8000")
 
+# Zona horaria de Lima, Perú
+LIMA_TZ = pytz.timezone('America/Lima')
+
+# Inicializar Agente Climático Inteligente v2.0
+agente_clima = AgenteClimaticoInteligente()
+
+# Obtener TODOS los datos climáticos con validación inteligente
+clima_data = agente_clima.obtener_datos_climaticos_completos()
+
+# Extraer valores con validación
+default_t2m = clima_data.get("T2M", 20.0)
+default_rh2m = clima_data.get("RH2M", 65)
+default_prectot = clima_data.get("PRECTOT", 0.0)
+default_allsky = clima_data.get("ALLSKY", 400.0)
+
 st.title("🔮 Predicción de Demanda Energética")
 st.markdown("### Ingresa los datos meteorológicos y temporales para predecir la demanda")
 
-# Información sobre el modelo
+# Banner de estado del agente inteligente (más compacto)
+st.success("""
+**🤖 Agente Climático Inteligente v2.0 ACTIVO** • Validación multicapa: Rangos físicos ✅ | Análisis estadístico 🔍 | Google AI 🤖
+""")
+
+# Ubicación y botón de refresh en una sola línea
+col_loc, col_refresh = st.columns([5, 1])
+with col_loc:
+    st.caption(f"🌍 **{clima_data['location']}** | 📡 Firebase IoT | 🌐 OpenWeatherMap | 🛰️ NASA POWER")
+with col_refresh:
+    if st.button("🔄", help="Refrescar datos climáticos"):
+        agente_clima.limpiar_cache()
+        st.rerun()
+
+# Mostrar SOLO advertencias importantes (outliers severos o rechazos)
+if 'validaciones' in clima_data and clima_data['validaciones']:
+    for var_name, validacion in clima_data['validaciones'].items():
+        nivel = validacion.get('nivel', '')
+        # Solo mostrar si es outlier leve o advertencia válida
+        if '⚠️' in nivel or '🟡' in nivel:
+            with st.expander(f"⚠️ {var_name.upper()}: {nivel}"):
+                st.caption(validacion['mensaje'])
+                if validacion.get('ai_analisis'):
+                    st.info(f"🤖 Análisis AI: {validacion['ai_analisis']}")
+
+# Información sobre el modelo (más compacto)
 with st.expander("ℹ️ ¿Cómo funciona?"):
     st.markdown("""
-    Este sistema utiliza un modelo de Machine Learning (XGBoost) entrenado con datos históricos 
-    para predecir la demanda energética basándose en:
+    **Agente Climático Inteligente** con validación multicapa:
+    - 📡 **Firebase IoT**: Sensores temperatura/humedad en tiempo real
+    - 🌐 **OpenWeatherMap**: Precipitación actual
+    - 🛰️ **NASA POWER**: Radiación solar histórica
     
-    - 🌡️ **Variables meteorológicas**: Temperatura, humedad, precipitación, radiación solar
-    - 📅 **Variables temporales**: Hora del día, día de la semana, mes del año
-    - 🎯 **Variables calendáricas**: Días festivos, fines de semana
+    **Predicción con Machine Learning (XGBoost)** basada en:
+    - 🌡️ Variables meteorológicas (temperatura, humedad, precipitación, radiación)
+    - 📅 Variables temporales (hora, día, mes, fines de semana, festivos)
     
-    **No necesitas ingresar la demanda energética** - ¡el modelo la predecirá por ti!
+    *El agente obtiene automáticamente los datos más recientes* - ¡tú solo ajusta si es necesario!
     """)
 
 st.divider()
 
-# Crear formulario de predicción
+# ==================== FORMULARIO DE PREDICCIÓN ====================
+st.markdown("### 📊 Configuración de Predicción")
+
+# Crear formulario
 with st.form("prediction_form", clear_on_submit=False):
+    
+    # Sección temporal
     st.markdown("#### 📅 Información Temporal")
+    col_fecha, col_hora = st.columns(2)
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
+    with col_fecha:
         fecha = st.date_input(
             "Fecha de Predicción",
-            value=datetime.now().date(),
+            value=datetime.now(LIMA_TZ).date(),
             help="Fecha para la cual deseas predecir la demanda"
         )
     
-    with col2:
+    with col_hora:
         hora = st.time_input(
             "Hora de Predicción",
-            value=datetime.now().time(),
+            value=datetime.now(LIMA_TZ).time(),
             help="Hora para la predicción (formato 24h)"
         )
     
-    # Combinar fecha y hora
+    # Combinar fecha y hora y calcular variables derivadas
     timestamp = datetime.combine(fecha, hora)
-    
-    # Detectar si es fin de semana
     is_weekend = timestamp.weekday() >= 5
-    
-    # Detectar si es festivo (puedes personalizar esta lista)
-    holidays = [
-        "01-01", "04-14", "04-15", "05-01", "06-29",
-        "07-28", "07-29", "08-30", "10-08", "11-01",
-        "12-08", "12-25"
-    ]
+    holidays = ["01-01", "04-14", "04-15", "05-01", "06-29", "07-28", "07-29", 
+                "08-30", "10-08", "11-01", "12-08", "12-25"]
     is_holiday = timestamp.strftime("%m-%d") in holidays
     
     st.divider()
     
+    # Sección meteorológica
     st.markdown("#### 🌦️ Variables Meteorológicas")
-    st.caption("Ingresa las condiciones meteorológicas actuales o esperadas")
-    
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     
     with col1:
+        st.markdown("**Temperatura**")
         t2m = st.number_input(
-            "🌡️ Temperatura Promedio (°C)",
+            "Promedio (°C)",
             min_value=-20.0,
             max_value=50.0,
-            value=20.0,
+            value=float(default_t2m),
             step=0.5,
-            help="Temperatura promedio al nivel de 2 metros"
+            key="t2m_input"
         )
         
-        t2m_min = st.number_input(
-            "❄️ Temperatura Mínima (°C)",
-            min_value=-30.0,
-            max_value=50.0,
-            value=t2m - 5,
-            step=0.5,
-            help="Temperatura mínima esperada"
-        )
+        col_min, col_max = st.columns(2)
+        with col_min:
+            t2m_min = st.number_input(
+                "Mínima (°C)",
+                min_value=-30.0,
+                max_value=50.0,
+                value=float(t2m - 5),
+                step=0.5,
+                key="t2m_min_input"
+            )
+        with col_max:
+            t2m_max = st.number_input(
+                "Máxima (°C)",
+                min_value=-20.0,
+                max_value=60.0,
+                value=float(t2m + 5),
+                step=0.5,
+                key="t2m_max_input"
+            )
         
-        t2m_max = st.number_input(
-            "🔥 Temperatura Máxima (°C)",
-            min_value=-20.0,
-            max_value=60.0,
-            value=t2m + 5,
-            step=0.5,
-            help="Temperatura máxima esperada"
+        st.markdown("**Humedad**")
+        rh2m = st.slider(
+            "Humedad Relativa (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(default_rh2m),
+            step=1.0
         )
     
     with col2:
-        rh2m = st.slider(
-            "💧 Humedad Relativa (%)",
-            min_value=0,
-            max_value=100,
-            value=65,
-            help="Humedad relativa al nivel de 2 metros"
-        )
-        
+        st.markdown("**Precipitación**")
         prectot = st.number_input(
-            "🌧️ Precipitación Total (mm)",
+            "Precipitación Total (mm)",
             min_value=0.0,
             max_value=200.0,
-            value=0.0,
-            step=0.1,
-            help="Precipitación acumulada"
+            value=float(default_prectot),
+            step=0.1
         )
         
+        st.markdown("**Radiación Solar**")
         allsky = st.number_input(
-            "☀️ Radiación Solar (W/m²)",
+            "Radiación Solar (W/m²)",
             min_value=0.0,
             max_value=1000.0,
-            value=400.0,
-            step=10.0,
-            help="Radiación solar total (ALLSKY_SFC_SW_DWN)"
+            value=float(default_allsky),
+            step=10.0
         )
-    
-    with col3:
-        st.markdown("**Variables Calculadas Automáticamente**")
         
-        # Mostrar variables que se calcularán
-        st.info(f"📅 **Día:** {timestamp.strftime('%A, %d %B %Y')}")
-        st.info(f"⏰ **Hora:** {timestamp.strftime('%H:%M')}")
-        st.info(f"🗓️ **Fin de Semana:** {'Sí' if is_weekend else 'No'}")
-        st.info(f"🎉 **Día Festivo:** {'Sí' if is_holiday else 'No'}")
-        
-        # Calcular HDD y CDD
+        # Variables derivadas (compactas)
+        st.caption("📊 Variables calculadas automáticamente:")
         hdd = max(0.0, 18.3 - t2m)
         cdd0 = max(0.0, t2m - 0)
         cdd10 = max(0.0, t2m - 10)
         
-        st.caption("Variables derivadas:")
-        st.metric("HDD18.3", f"{hdd:.2f}")
-        st.metric("CDD0", f"{cdd0:.2f}")
-        st.metric("CDD10", f"{cdd10:.2f}")
+        col_hdd, col_cdd = st.columns(2)
+        with col_hdd:
+            st.metric("HDD18.3", f"{hdd:.1f}")
+        with col_cdd:
+            st.metric("CDD0/CDD10", f"{cdd0:.1f} / {cdd10:.1f}")
     
     st.divider()
     
-    # Botón de predicción
-    col1, col2, col3 = st.columns([2, 1, 2])
-    
-    with col2:
+    # Botón de predicción centrado
+    col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 2])
+    with col_btn2:
         predict_button = st.form_submit_button(
             "🔮 Predecir Demanda",
             use_container_width=True,
@@ -301,7 +341,7 @@ if predict_button:
                 
                 if predicted_energy > 130:
                     st.error("""
-                    ⚠️ **Demanda Alta Detectada**
+                    ⚠️ *Demanda Alta Detectada*
                     
                     - Activar protocolos de alta demanda
                     - Considerar fuentes de energía adicionales
@@ -309,7 +349,7 @@ if predict_button:
                     """)
                 elif predicted_energy > 110:
                     st.warning("""
-                    ⚡ **Demanda Normal-Alta**
+                    ⚡ *Demanda Normal-Alta*
                     
                     - Monitorear continuamente
                     - Preparar recursos de respaldo
@@ -317,7 +357,7 @@ if predict_button:
                     """)
                 else:
                     st.success("""
-                    ✅ **Demanda Normal**
+                    ✅ *Demanda Normal*
                     
                     - Operación estándar
                     - Continuar con monitoreo rutinario
@@ -341,6 +381,31 @@ if predict_button:
                     - Tipo: XGBRegressor
                     - Features: {result.get('n_predictions', 17)}
                     """)
+                    
+                    st.markdown("**Fuentes de Datos Climáticos:**")
+                    st.json({
+                        "ubicacion": clima_data['location'],
+                        "coordenadas": f"({clima_data['lat']:.4f}, {clima_data['lon']:.4f})",
+                        "fuentes": clima_data['fuentes'],
+                        "timestamp": clima_data['timestamp'],
+                        "desde_cache": clima_data.get('from_cache', False)
+                    })
+                    
+                    if 'validaciones' in clima_data and clima_data['validaciones']:
+                        st.markdown("**Detalles de Validación:**")
+                        for var_name, val_info in clima_data['validaciones'].items():
+                            with st.expander(f"{var_name.upper()} - {val_info['nivel']}"):
+                                st.caption(val_info['mensaje'])
+                                st.caption(f"Capa de validación: {val_info['capa_validacion']}")
+                                if val_info.get('zscore'):
+                                    st.caption(f"Z-score: {val_info['zscore']:.2f}")
+                                if val_info.get('ai_analisis'):
+                                    st.info(f"🤖 {val_info['ai_analisis']}")
+                    
+                    # Estadísticas del agente
+                    stats = agente_clima.obtener_estadisticas()
+                    st.markdown("**Estado del Agente Climático:**")
+                    st.json(stats)
                 
                 # Opción para guardar la predicción
                 st.divider()
